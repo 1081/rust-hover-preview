@@ -1,5 +1,6 @@
-use crate::config::TransparentBackground;
-use crate::preview_window::refresh_preview;
+use crate::config::{PdfPreviewHandler, TransparentBackground};
+use crate::pdf_preview::is_pdf_handler_available;
+use crate::preview_window::{hide_preview, refresh_preview};
 use crate::{startup, CONFIG, RUNNING};
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::Ordering;
@@ -14,10 +15,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     GetCursorPos, LoadImageW, PeekMessageW, PostQuitMessage, RegisterClassExW,
     RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, CS_HREDRAW,
-    CS_VREDRAW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_POPUP, MF_STRING,
-    MF_UNCHECKED, MSG, PM_REMOVE, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND,
-    WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_POPUP, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
+    CS_VREDRAW, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_SHARED, MF_CHECKED, MF_GRAYED, MF_POPUP,
+    MF_STRING, MF_UNCHECKED, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PM_REMOVE,
+    SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
+    WM_POWERBROADCAST, WM_RBUTTONUP, WM_USER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 const WM_TRAYICON: u32 = WM_USER + 1;
@@ -49,6 +50,10 @@ const ID_TRAY_REHOVER_DELAY_SLOW: u16 = 1037; // 1000ms
 const ID_TRAY_DELAY_FAST_PLUS: u16 = 1038; // 750ms
 const ID_TRAY_REHOVER_DELAY_FAST_PLUS: u16 = 1039; // 750ms
 const ID_TRAY_OPEN_CONFIG: u16 = 1040;
+const ID_TRAY_PDF_WINDOWS_DEFAULT: u16 = 1041;
+const ID_TRAY_PDF_XCHANGE: u16 = 1042;
+const ID_TRAY_PDF_XCHANGE_LEGACY: u16 = 1043;
+const ID_TRAY_PDF_POWERTOYS: u16 = 1044;
 
 const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
 
@@ -120,6 +125,14 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_REHOVER_DELAY_MEDIUM => set_same_file_rehover_delay(500),
                 ID_TRAY_REHOVER_DELAY_FAST_PLUS => set_same_file_rehover_delay(750),
                 ID_TRAY_REHOVER_DELAY_SLOW => set_same_file_rehover_delay(1000),
+                ID_TRAY_PDF_WINDOWS_DEFAULT => {
+                    set_pdf_preview_handler(PdfPreviewHandler::WindowsDefault)
+                }
+                ID_TRAY_PDF_XCHANGE => set_pdf_preview_handler(PdfPreviewHandler::PdfXChange),
+                ID_TRAY_PDF_XCHANGE_LEGACY => {
+                    set_pdf_preview_handler(PdfPreviewHandler::PdfXChangeLegacy)
+                }
+                ID_TRAY_PDF_POWERTOYS => set_pdf_preview_handler(PdfPreviewHandler::PowerToys),
                 ID_TRAY_OPEN_CONFIG => open_config_file(),
                 _ => {}
             }
@@ -132,9 +145,7 @@ unsafe extern "system" fn tray_window_proc(
         }
         WM_POWERBROADCAST => {
             let power_event = wparam.0 as u32;
-            if power_event == PBT_APMRESUMEAUTOMATIC
-                || power_event == PBT_APMRESUMESUSPEND
-            {
+            if power_event == PBT_APMRESUMEAUTOMATIC || power_event == PBT_APMRESUMESUSPEND {
                 // System resumed from sleep — re-add tray icon in case
                 // DWM/Explorer restart affected its visibility.
                 remove_tray_icon(hwnd);
@@ -208,6 +219,55 @@ unsafe fn show_context_menu(hwnd: HWND) {
         confirm_flags,
         ID_TRAY_CONFIRM_FILE_TYPE as usize,
         w!("Confirm File Type"),
+    );
+
+    let selected_pdf_handler = CONFIG
+        .lock()
+        .map(|config| config.pdf_preview_handler)
+        .unwrap_or(PdfPreviewHandler::WindowsDefault);
+    let pdf_handler_menu = CreatePopupMenu().unwrap();
+    let pdf_handler_flags = |handler: PdfPreviewHandler| {
+        MF_STRING
+            | if selected_pdf_handler == handler {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            }
+            | if is_pdf_handler_available(handler) {
+                MF_UNCHECKED
+            } else {
+                MF_GRAYED
+            }
+    };
+    let _ = AppendMenuW(
+        pdf_handler_menu,
+        pdf_handler_flags(PdfPreviewHandler::WindowsDefault),
+        ID_TRAY_PDF_WINDOWS_DEFAULT as usize,
+        w!("Windows Default"),
+    );
+    let _ = AppendMenuW(
+        pdf_handler_menu,
+        pdf_handler_flags(PdfPreviewHandler::PdfXChange),
+        ID_TRAY_PDF_XCHANGE as usize,
+        w!("PDF-XChange (Current)"),
+    );
+    let _ = AppendMenuW(
+        pdf_handler_menu,
+        pdf_handler_flags(PdfPreviewHandler::PdfXChangeLegacy),
+        ID_TRAY_PDF_XCHANGE_LEGACY as usize,
+        w!("PDF-XChange (Legacy)"),
+    );
+    let _ = AppendMenuW(
+        pdf_handler_menu,
+        pdf_handler_flags(PdfPreviewHandler::PowerToys),
+        ID_TRAY_PDF_POWERTOYS as usize,
+        w!("PowerToys"),
+    );
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING | MF_POPUP,
+        pdf_handler_menu.0 as usize,
+        w!("PDF Preview Handler"),
     );
 
     // Add Transparent Background submenu
@@ -552,6 +612,17 @@ fn set_same_file_rehover_delay(delay_ms: u64) {
         config.same_file_rehover_delay_ms = delay_ms;
         config.save();
     }
+}
+
+fn set_pdf_preview_handler(handler: PdfPreviewHandler) {
+    if !is_pdf_handler_available(handler) {
+        return;
+    }
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pdf_preview_handler = handler;
+        config.save();
+    }
+    hide_preview();
 }
 
 fn open_config_file() {

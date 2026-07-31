@@ -115,6 +115,9 @@ Section PreInstall
   ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "video_volume"
   StrCmp $0 "" 0 +2
     WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "video_volume" "0"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "pdf_preview_handler"
+  StrCmp $0 "" 0 +2
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "pdf_preview_handler" "windows_default"
   StrCpy $INSTDIR "$LOCALAPPDATA\\rust-hover-preview"
   StrCmp $9 "1" 0 +2
     WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "RustHoverPreview" "$INSTDIR\\rust-hover-preview.exe"

@@ -44,6 +44,35 @@ impl TransparentBackground {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PdfPreviewHandler {
+    WindowsDefault,
+    PdfXChange,
+    PdfXChangeLegacy,
+    PowerToys,
+}
+
+impl PdfPreviewHandler {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WindowsDefault => "windows_default",
+            Self::PdfXChange => "pdf_xchange",
+            Self::PdfXChangeLegacy => "pdf_xchange_legacy",
+            Self::PowerToys => "powertoys",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "windows_default" => Some(Self::WindowsDefault),
+            "pdf_xchange" => Some(Self::PdfXChange),
+            "pdf_xchange_legacy" => Some(Self::PdfXChangeLegacy),
+            "powertoys" => Some(Self::PowerToys),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub is_first_run: bool,
@@ -58,6 +87,7 @@ pub struct AppConfig {
     pub webp_playback_fps: u32,
     pub transparent_background: TransparentBackground,
     pub video_volume: u32,
+    pub pdf_preview_handler: PdfPreviewHandler,
 }
 
 impl Default for AppConfig {
@@ -75,6 +105,7 @@ impl Default for AppConfig {
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             transparent_background: TransparentBackground::Black,
             video_volume: 0, // Mute by default
+            pdf_preview_handler: PdfPreviewHandler::WindowsDefault,
         }
     }
 }
@@ -174,6 +205,11 @@ impl AppConfig {
                 "video_volume",
                 Some(self.video_volume.to_string()),
             );
+            ini.set(
+                CONFIG_SECTION,
+                "pdf_preview_handler",
+                Some(self.pdf_preview_handler.as_str().to_string()),
+            );
             let _ = ini.write(path.to_string_lossy().as_ref());
         }
     }
@@ -220,6 +256,28 @@ impl AppConfig {
             if let Ok(value) = u32::try_from(value) {
                 self.video_volume = value;
             }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "pdf_preview_handler") {
+            if let Some(handler) = PdfPreviewHandler::from_str(&value) {
+                self.pdf_preview_handler = handler;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pdf_preview_handler_round_trips_config_values() {
+        for handler in [
+            PdfPreviewHandler::WindowsDefault,
+            PdfPreviewHandler::PdfXChange,
+            PdfPreviewHandler::PdfXChangeLegacy,
+            PdfPreviewHandler::PowerToys,
+        ] {
+            assert_eq!(PdfPreviewHandler::from_str(handler.as_str()), Some(handler));
         }
     }
 }

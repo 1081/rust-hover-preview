@@ -117,6 +117,7 @@ The app uses the registered handler and falls back to the current PDF-XChange ha
 - **Transparent Background**: `Transparent`, `Black`, `White`, or `Checkerboard`
 - **Enable Off Trigger Key**: Temporarily suppress previews while the displayed configured key is held
 - **Confirm File Type**: When enabled, validates file content signatures (magic bytes) against the extension to avoid loading mislabeled files. If previews don't appear for certain files that should be supported, try enabling this option — the app will attempt to decode them by their true content type rather than relying solely on the file extension.
+- **PDF Preview Handler**: Select `Windows Default`, `PDF-XChange (Current)`, `PDF-XChange (Legacy)`, or `PowerToys`. Handlers that are not registered are disabled. This changes only Rust Hover Preview and does not modify the Windows default.
 - **Run at Startup**: Add/remove startup entry in Windows
 - **Edit Config.ini**: Open configuration file in your default editor
 - **Exit**: Close the application
@@ -144,11 +145,13 @@ follow_cursor=false
 transparent_background=black
 webp_playback_fps=90
 video_volume=0
+pdf_preview_handler=windows_default
 ```
 
 - When `enable_off_trigger_key` is enabled, hold the configured `off_trigger_key` to keep previews hidden while browsing Explorer.
 - When `confirm_file_type` is enabled, the app validates file content signatures (magic bytes) against the extension — useful for files with incorrect extensions.
 - `webp_playback_fps` controls the maximum playback speed for animated WebP files (1–90 FPS; 0 resets to the default of 90).
+- `pdf_preview_handler` accepts `windows_default`, `pdf_xchange`, `pdf_xchange_legacy`, or `powertoys`.
 
 ## Build from Source
 

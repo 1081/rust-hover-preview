@@ -3015,7 +3015,11 @@ pub fn run_preview_window() {
                             right: media_width,
                             bottom: media_height,
                         };
-                        if pdf_host.open(&path, hwnd, rect).is_ok() {
+                        let pdf_handler = CONFIG
+                            .lock()
+                            .map(|config| config.pdf_preview_handler)
+                            .unwrap_or(crate::config::PdfPreviewHandler::WindowsDefault);
+                        if pdf_host.open(&path, hwnd, rect, pdf_handler).is_ok() {
                             keep_pdf_children_nonactivating(hwnd);
                             last_pdf_child_check = Instant::now();
                         } else {
