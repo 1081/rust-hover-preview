@@ -14,10 +14,37 @@ use windows::Win32::Graphics::Gdi::{
     TRANSPARENT,
 };
 
-pub const TEXT_PREVIEW_WIDTH: u32 = 900;
-pub const TEXT_PREVIEW_HEIGHT: u32 = 650;
+pub const TEXT_PREVIEW_WIDTH: u32 = 1000;
+pub const TEXT_PREVIEW_HEIGHT: u32 = 760;
 const MAX_TEXT_BYTES: usize = 512 * 1024;
 const MAX_RENDERED_LINE_CHARS: usize = 400;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SyntaxKind {
+    Plain,
+    Keyword,
+    Type,
+    String,
+    Number,
+    Comment,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Language {
+    CLike,
+    Python,
+    Shell,
+    Sql,
+    Markup,
+    Config,
+    Plain,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct StyledSpan<'a> {
+    text: &'a str,
+    kind: SyntaxKind,
+}
 
 const TEXT_EXTENSIONS: &[&str] = &[
     "txt",
@@ -239,6 +266,291 @@ fn expand_tabs(line: &str) -> String {
     expanded
 }
 
+fn language_for_path(path: &Path) -> Language {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "py" | "pyw" | "rb" => Language::Python,
+        "sh" | "bash" | "zsh" | "ps1" | "psm1" | "psd1" | "bat" | "cmd" => Language::Shell,
+        "sql" => Language::Sql,
+        "html" | "htm" | "xml" | "vue" | "svelte" | "css" | "scss" | "sass" | "less" => {
+            Language::Markup
+        }
+        "ini" | "cfg" | "conf" | "toml" | "yaml" | "yml" | "json" | "jsonc" | "properties"
+        | "env" => Language::Config,
+        "rs" | "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "c" | "h" | "cc" | "cpp" | "cxx"
+        | "hh" | "hpp" | "hxx" | "cs" | "java" | "go" | "php" | "swift" | "kt" | "kts" | "lua"
+        | "dart" | "gradle" => Language::CLike,
+        _ => Language::Plain,
+    }
+}
+
+fn is_keyword(word: &str, language: Language) -> bool {
+    let common = matches!(
+        word,
+        "as" | "async"
+            | "await"
+            | "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "default"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "from"
+            | "if"
+            | "import"
+            | "in"
+            | "let"
+            | "match"
+            | "mod"
+            | "move"
+            | "new"
+            | "null"
+            | "override"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "return"
+            | "self"
+            | "static"
+            | "struct"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "trait"
+            | "true"
+            | "try"
+            | "use"
+            | "var"
+            | "while"
+            | "yield"
+    );
+    common
+        || match language {
+            Language::Python => matches!(
+                word,
+                "and"
+                    | "assert"
+                    | "def"
+                    | "del"
+                    | "elif"
+                    | "except"
+                    | "global"
+                    | "is"
+                    | "lambda"
+                    | "nonlocal"
+                    | "not"
+                    | "or"
+                    | "pass"
+                    | "raise"
+                    | "with"
+            ),
+            Language::Sql => matches!(
+                word.to_ascii_lowercase().as_str(),
+                "select"
+                    | "insert"
+                    | "update"
+                    | "delete"
+                    | "create"
+                    | "drop"
+                    | "alter"
+                    | "into"
+                    | "values"
+                    | "where"
+                    | "join"
+                    | "on"
+                    | "group"
+                    | "order"
+                    | "by"
+                    | "having"
+                    | "limit"
+                    | "offset"
+                    | "union"
+                    | "all"
+                    | "distinct"
+                    | "and"
+                    | "or"
+                    | "not"
+                    | "null"
+            ),
+            Language::Shell => matches!(
+                word,
+                "function" | "then" | "fi" | "done" | "esac" | "foreach" | "param"
+            ),
+            _ => false,
+        }
+}
+
+fn is_type(word: &str) -> bool {
+    matches!(
+        word,
+        "bool"
+            | "byte"
+            | "char"
+            | "double"
+            | "f32"
+            | "f64"
+            | "float"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "int"
+            | "isize"
+            | "long"
+            | "short"
+            | "str"
+            | "string"
+            | "String"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "uint"
+            | "usize"
+            | "void"
+    ) || word.chars().next().map(char::is_uppercase).unwrap_or(false)
+}
+
+fn comment_marker(language: Language) -> Option<&'static str> {
+    match language {
+        Language::Python | Language::Shell | Language::Config => Some("#"),
+        Language::Sql => Some("--"),
+        Language::CLike | Language::Markup => Some("//"),
+        Language::Plain => None,
+    }
+}
+
+fn tokenize_line<'a>(
+    line: &'a str,
+    language: Language,
+    in_block_comment: &mut bool,
+) -> Vec<StyledSpan<'a>> {
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while index < line.len() {
+        let rest = &line[index..];
+        if *in_block_comment {
+            let end = rest.find("*/").map(|value| value + 2).unwrap_or(rest.len());
+            spans.push(StyledSpan {
+                text: &rest[..end],
+                kind: SyntaxKind::Comment,
+            });
+            index += end;
+            if end < rest.len() || rest.ends_with("*/") {
+                *in_block_comment = false;
+            }
+            continue;
+        }
+        if let Some(marker) = comment_marker(language) {
+            if rest.starts_with(marker) {
+                spans.push(StyledSpan {
+                    text: rest,
+                    kind: SyntaxKind::Comment,
+                });
+                break;
+            }
+        }
+        if matches!(language, Language::CLike | Language::Markup) && rest.starts_with("/*") {
+            let end = rest[2..]
+                .find("*/")
+                .map(|value| value + 4)
+                .unwrap_or(rest.len());
+            *in_block_comment = !rest[..end].ends_with("*/");
+            spans.push(StyledSpan {
+                text: &rest[..end],
+                kind: SyntaxKind::Comment,
+            });
+            index += end;
+            continue;
+        }
+
+        let first = rest.chars().next().unwrap();
+        if matches!(first, '\'' | '"' | '`') {
+            let mut escaped = false;
+            let mut end = first.len_utf8();
+            for ch in rest[end..].chars() {
+                end += ch.len_utf8();
+                if ch == first && !escaped {
+                    break;
+                }
+                escaped = ch == '\\' && !escaped;
+                if ch != '\\' {
+                    escaped = false;
+                }
+            }
+            spans.push(StyledSpan {
+                text: &rest[..end],
+                kind: SyntaxKind::String,
+            });
+            index += end;
+            continue;
+        }
+        if first.is_ascii_digit() {
+            let end = rest
+                .find(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_')))
+                .unwrap_or(rest.len());
+            spans.push(StyledSpan {
+                text: &rest[..end],
+                kind: SyntaxKind::Number,
+            });
+            index += end;
+            continue;
+        }
+        if first.is_alphabetic() || first == '_' {
+            let end = rest
+                .find(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+                .unwrap_or(rest.len());
+            let word = &rest[..end];
+            let kind = if is_keyword(word, language) {
+                SyntaxKind::Keyword
+            } else if is_type(word) {
+                SyntaxKind::Type
+            } else {
+                SyntaxKind::Plain
+            };
+            spans.push(StyledSpan { text: word, kind });
+            index += end;
+            continue;
+        }
+
+        let end = first.len_utf8();
+        spans.push(StyledSpan {
+            text: &rest[..end],
+            kind: SyntaxKind::Plain,
+        });
+        index += end;
+    }
+    spans
+}
+
+fn syntax_color(kind: SyntaxKind) -> COLORREF {
+    COLORREF(match kind {
+        SyntaxKind::Plain => 0x00d4d4d4,
+        SyntaxKind::Keyword => 0x00c086c5,
+        SyntaxKind::Type => 0x00b0c94e,
+        SyntaxKind::String => 0x007891ce,
+        SyntaxKind::Number => 0x00a8ceb5,
+        SyntaxKind::Comment => 0x0055996a,
+    })
+}
+
 unsafe fn render_text(
     path: &Path,
     text: &str,
@@ -287,8 +599,8 @@ unsafe fn render_text(
         bottom: height as i32,
     };
     FillRect(mem_dc, &full_rect, background);
-    let header_height = 42.min(height as i32);
-    let footer_height = 28.min((height as i32 - header_height).max(0));
+    let header_height = 34.min(height as i32);
+    let footer_height = 22.min((height as i32 - header_height).max(0));
     let header_rect = RECT {
         bottom: header_height,
         ..full_rect
@@ -296,7 +608,7 @@ unsafe fn render_text(
     FillRect(mem_dc, &header_rect, header_background);
 
     let font = CreateFontW(
-        -16,
+        -14,
         0,
         0,
         0,
@@ -333,9 +645,9 @@ unsafe fn render_text(
         DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
     );
 
-    let line_height = 20;
-    let content_top = header_height + 10;
-    let content_bottom = height as i32 - footer_height - 8;
+    let line_height = 17;
+    let content_top = header_height + 5;
+    let content_bottom = height as i32 - footer_height - 4;
     let visible_lines = ((content_bottom - content_top) / line_height).max(0) as usize;
     let number_digits = visible_lines.max(1).to_string().len().max(3);
     let mut zero_size = windows::Win32::Foundation::SIZE::default();
@@ -350,6 +662,8 @@ unsafe fn render_text(
     };
     FillRect(mem_dc, &gutter_rect, gutter_background);
 
+    let language = language_for_path(path);
+    let mut in_block_comment = false;
     for (index, line) in text.lines().take(visible_lines).enumerate() {
         let y = content_top + index as i32 * line_height;
         let number = format!("{:>width$}", index + 1, width = number_digits);
@@ -358,9 +672,18 @@ unsafe fn render_text(
         let _ = TextOutW(mem_dc, 8, y, &number);
 
         let expanded = expand_tabs(line);
-        let code: Vec<u16> = expanded.encode_utf16().collect();
-        SetTextColor(mem_dc, COLORREF(0x00e6e6e6));
-        let _ = TextOutW(mem_dc, gutter_width + 10, y, &code);
+        let mut x = gutter_width + 8;
+        for span in tokenize_line(&expanded, language, &mut in_block_comment) {
+            let code: Vec<u16> = span.text.encode_utf16().collect();
+            SetTextColor(mem_dc, syntax_color(span.kind));
+            let _ = TextOutW(mem_dc, x, y, &code);
+            let mut size = windows::Win32::Foundation::SIZE::default();
+            let _ = GetTextExtentPoint32W(mem_dc, &code, &mut size);
+            x += size.cx;
+            if x >= width as i32 {
+                break;
+            }
+        }
     }
 
     let mut status: Vec<u16> = status.encode_utf16().collect();
@@ -431,6 +754,55 @@ mod tests {
     fn expands_tabs_to_four_column_stops() {
         assert_eq!(expand_tabs("a\tb"), "a   b");
         assert_eq!(expand_tabs("abcd\tb"), "abcd    b");
+    }
+
+    #[test]
+    fn detects_language_from_extension() {
+        assert_eq!(language_for_path(Path::new("main.rs")), Language::CLike);
+        assert_eq!(language_for_path(Path::new("query.sql")), Language::Sql);
+        assert_eq!(language_for_path(Path::new("notes.txt")), Language::Plain);
+    }
+
+    #[test]
+    fn highlights_keywords_strings_numbers_and_comments() {
+        let mut in_comment = false;
+        let spans = tokenize_line(
+            "let answer: u32 = 42; // result",
+            Language::CLike,
+            &mut in_comment,
+        );
+        assert!(spans
+            .iter()
+            .any(|span| span.text == "let" && span.kind == SyntaxKind::Keyword));
+        assert!(spans
+            .iter()
+            .any(|span| span.text == "u32" && span.kind == SyntaxKind::Type));
+        assert!(spans
+            .iter()
+            .any(|span| span.text == "42" && span.kind == SyntaxKind::Number));
+        assert!(spans
+            .iter()
+            .any(|span| span.text == "// result" && span.kind == SyntaxKind::Comment));
+
+        let spans = tokenize_line("print(\"hello\")", Language::Python, &mut in_comment);
+        assert!(spans
+            .iter()
+            .any(|span| span.text == "\"hello\"" && span.kind == SyntaxKind::String));
+    }
+
+    #[test]
+    fn carries_multiline_comment_state() {
+        let mut in_comment = false;
+        let first = tokenize_line("/* opening", Language::CLike, &mut in_comment);
+        assert!(in_comment);
+        assert_eq!(first[0].kind, SyntaxKind::Comment);
+
+        let second = tokenize_line("closing */ let", Language::CLike, &mut in_comment);
+        assert!(!in_comment);
+        assert_eq!(second[0].kind, SyntaxKind::Comment);
+        assert!(second
+            .iter()
+            .any(|span| span.text == "let" && span.kind == SyntaxKind::Keyword));
     }
 
     #[test]

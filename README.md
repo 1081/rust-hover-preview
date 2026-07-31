@@ -16,7 +16,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Static image previews plus animated GIF playback and libwebp-backed animated WebP playback
 - Video previews through FFmpeg (`ffplay` + `ffprobe`)
 - PDF previews through the Windows preview-handler mechanism
-- Text and source-code previews with encoding detection and line numbers
+- Dense text and source-code previews with encoding detection, line numbers, and syntax highlighting
 - Tray controls for enable/disable, delay, positioning, startup, off-trigger key, and volume
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
 - Topmost, non-activating preview windows designed to avoid focus stealing
@@ -41,7 +41,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 
 `txt`, `md`, `log`, `ini`, `cfg`, `conf`, `rs`, `py`, `js`, `jsx`, `ts`, `tsx`, `c`, `h`, `cpp`, `hpp`, `cs`, `java`, `go`, `rb`, `php`, `swift`, `kt`, `html`, `css`, `xml`, `json`, `yaml`, `toml`, `sql`, `sh`, `ps1`, `bat`, `cmd`, `lua`, and common related extensions and extensionless build/config files.
 
-Text previews read at most 512 KB, support UTF-8, UTF-16 BOMs, and Windows-1252 fallback, and reject likely binary content.
+Text previews read at most 512 KB, support UTF-8, UTF-16 BOMs, and Windows-1252 fallback, and reject likely binary content. Source files use lightweight extension-aware syntax highlighting for keywords, types, strings, numbers, and comments.
 
 ## Installation (Recommended)
 
