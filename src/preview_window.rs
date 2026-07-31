@@ -1,4 +1,5 @@
 use crate::config::{sanitize_webp_playback_fps, TransparentBackground, DEFAULT_WEBP_PLAYBACK_FPS};
+use crate::pdf_preview::PdfPreviewHost;
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::GenericImageView;
@@ -8,7 +9,7 @@ use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Write};
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
@@ -16,23 +17,28 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
-    SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
-    DIB_RGB_COLORS, PAINTSTRUCT,
+use windows::Win32::Foundation::{
+    BOOL, COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
 };
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DeleteDC, DeleteObject,
+    DrawTextW, EndPaint, FillRect, SelectObject, SetBkMode, SetTextColor, AC_SRC_ALPHA,
+    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, DT_CENTER,
+    DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, PAINTSTRUCT, TRANSPARENT,
+};
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetSystemMetrics, GetWindow,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, LoadCursorW,
-    MoveWindow, PeekMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GW_OWNER,
-    HWND_TOPMOST, IDC_ARROW, MSG, PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_POWERBROADCAST,
-    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND, PBT_APMSTANDBY, WNDCLASSEXW,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumChildWindows, EnumWindows, GetAncestor,
+    GetClientRect, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IsWindowVisible, LoadCursorW, MoveWindow, PeekMessageW,
+    RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
+    UpdateLayeredWindow, CS_HREDRAW, CS_VREDRAW, GA_ROOT, GWL_EXSTYLE, GW_OWNER, HWND_TOPMOST,
+    IDC_ARROW, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY, PBT_APMSUSPEND,
+    PM_REMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, ULW_ALPHA, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_POWERBROADCAST, WNDCLASSEXW,
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -341,10 +347,13 @@ pub fn is_cursor_over_image_preview() -> bool {
             return false;
         }
 
-        let hwnd_ptr = hwnd_under_cursor.0 as isize;
-
         let preview_hwnd = PREVIEW_HWND.load(Ordering::SeqCst);
-        preview_hwnd != 0 && hwnd_ptr == preview_hwnd
+        if preview_hwnd == 0 {
+            return false;
+        }
+
+        let root = GetAncestor(hwnd_under_cursor, GA_ROOT);
+        hwnd_under_cursor.0 as isize == preview_hwnd || root.0 as isize == preview_hwnd
     }
 }
 
@@ -395,6 +404,13 @@ fn is_video_file(path: &PathBuf) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| VIDEO_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+fn is_pdf_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("pdf"))
         .unwrap_or(false)
 }
 
@@ -1688,6 +1704,10 @@ fn load_media(
 
 /// Get original dimensions of media for positioning calculations
 fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
+    if is_pdf_file(path) {
+        return Some((800, 1000));
+    }
+
     if is_video_file(path) {
         return get_video_geometry(path)
             .map(|g| (g.width, g.height))
@@ -1698,6 +1718,147 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         image_dimensions_with_header_check(path)
     } else {
         image::image_dimensions(path).ok()
+    }
+}
+
+unsafe fn set_layered_preview_mode(hwnd: HWND, layered: bool) {
+    let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    let layered_flag = WS_EX_LAYERED.0 as isize;
+    let updated = if layered {
+        ex_style | layered_flag
+    } else {
+        ex_style & !layered_flag
+    };
+    if updated == ex_style {
+        return;
+    }
+
+    let _ = ShowWindow(hwnd, SW_HIDE);
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, updated);
+    let _ = SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+    );
+}
+
+unsafe extern "system" fn make_child_nonactivating(hwnd: HWND, _: LPARAM) -> BOOL {
+    let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_NOACTIVATE.0 as isize);
+    BOOL(1)
+}
+
+unsafe fn keep_pdf_children_nonactivating(hwnd: HWND) {
+    let _ = EnumChildWindows(hwnd, Some(make_child_nonactivating), LPARAM(0));
+}
+
+unsafe fn create_pdf_fallback_media(path: &Path, width: u32, height: u32) -> MediaData {
+    let width = width.max(1);
+    let height = height.max(1);
+    let mem_dc = CreateCompatibleDC(None);
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width as i32,
+            biHeight: -(height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        bmiColors: [Default::default()],
+    };
+    let mut bits: *mut core::ffi::c_void = ptr::null_mut();
+    let bitmap =
+        CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0).unwrap_or_default();
+    let old_bitmap = SelectObject(mem_dc, bitmap);
+
+    let full_rect = RECT {
+        left: 0,
+        top: 0,
+        right: width as i32,
+        bottom: height as i32,
+    };
+    let background = CreateSolidBrush(COLORREF(0x00202020));
+    FillRect(mem_dc, &full_rect, background);
+
+    let icon_size = (width.min(height) as i32 / 4)
+        .clamp(16, 160)
+        .min(width.min(height) as i32);
+    let icon_left = (width as i32 - icon_size) / 2;
+    let icon_top = (height as i32 - icon_size) / 2 - icon_size / 2;
+    let icon_rect = RECT {
+        left: icon_left,
+        top: icon_top,
+        right: icon_left + icon_size,
+        bottom: icon_top + icon_size,
+    };
+    let icon_brush = CreateSolidBrush(COLORREF(0x004747d8));
+    FillRect(mem_dc, &icon_rect, icon_brush);
+
+    SetBkMode(mem_dc, TRANSPARENT);
+    SetTextColor(mem_dc, COLORREF(0x00ffffff));
+    let mut pdf_label: Vec<u16> = "PDF".encode_utf16().collect();
+    let mut pdf_rect = icon_rect;
+    DrawTextW(
+        mem_dc,
+        &mut pdf_label,
+        &mut pdf_rect,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+    );
+
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "PDF preview unavailable".to_string());
+    let mut file_name: Vec<u16> = file_name.encode_utf16().collect();
+    let mut name_rect = RECT {
+        left: 16,
+        top: icon_rect.bottom + 24,
+        right: width as i32 - 16,
+        bottom: icon_rect.bottom + 64,
+    };
+    DrawTextW(
+        mem_dc,
+        &mut file_name,
+        &mut name_rect,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
+    );
+
+    let byte_len = width as usize * height as usize * 4;
+    let mut pixels = vec![0u8; byte_len];
+    if !bits.is_null() {
+        ptr::copy_nonoverlapping(bits.cast::<u8>(), pixels.as_mut_ptr(), byte_len);
+    }
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel[3] = 255;
+    }
+
+    let _ = SelectObject(mem_dc, old_bitmap);
+    let _ = DeleteObject(background);
+    let _ = DeleteObject(icon_brush);
+    let _ = DeleteObject(bitmap);
+    let _ = DeleteDC(mem_dc);
+
+    MediaData {
+        frames: vec![ImageFrame {
+            pixels,
+            width,
+            height,
+            delay_ms: 0,
+        }],
+        shared_frames: None,
+        all_frames_loaded: None,
+        current_frame: 0,
+        last_frame_time: Instant::now(),
+        media_type: MediaType::StaticImage,
+        stream_cancel: None,
+        video_process: None,
+        loading_start: None,
     }
 }
 
@@ -2475,6 +2636,7 @@ pub fn run_preview_window() {
     }
 
     unsafe {
+        let com_initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
         let hinstance = GetModuleHandleW(None).unwrap();
 
         // Register window class
@@ -2520,6 +2682,8 @@ pub fn run_preview_window() {
         // Track video position/size for periodic topmost re-assertion
         let mut video_pos: (i32, i32, i32, i32) = (0, 0, 0, 0); // (x, y, w, h)
         let mut last_topmost_check = Instant::now();
+        let mut pdf_host = PdfPreviewHost::new();
+        let mut last_pdf_child_check = Instant::now();
 
         // Background loading support
         let (load_tx, load_rx): (Sender<LoadResult>, Receiver<LoadResult>) = channel();
@@ -2553,12 +2717,17 @@ pub fn run_preview_window() {
                 }
                 current_video_path = None;
                 video_pos = (0, 0, 0, 0);
+                pdf_host.close();
 
                 // Re-assert layered window style after DWM restart.
                 // DWM is reinitialized during resume and the layered window's
                 // per-pixel alpha composition surface may need a fresh anchor.
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as isize | WS_EX_TOPMOST.0 as isize);
+                SetWindowLongPtrW(
+                    hwnd,
+                    GWL_EXSTYLE,
+                    ex_style | WS_EX_LAYERED.0 as isize | WS_EX_TOPMOST.0 as isize,
+                );
                 let _ = SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
@@ -2568,6 +2737,20 @@ pub fn run_preview_window() {
                     0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
                 );
+            }
+
+            if pdf_host.is_open() {
+                if !IsWindowVisible(hwnd).as_bool() {
+                    pdf_host.close();
+                    set_layered_preview_mode(hwnd, true);
+                } else if last_pdf_child_check.elapsed() >= Duration::from_millis(200) {
+                    last_pdf_child_check = Instant::now();
+                    let mut rect = RECT::default();
+                    if GetClientRect(hwnd, &mut rect).is_ok() {
+                        let _ = pdf_host.resize(rect);
+                    }
+                    keep_pdf_children_nonactivating(hwnd);
+                }
             }
 
             // Periodically re-assert topmost on the video window to prevent it
@@ -2708,6 +2891,7 @@ pub fn run_preview_window() {
                 let mut show_path: Option<PathBuf> = None;
                 let mut show_layout: Option<PreviewLayout> = None;
                 let mut show_is_video: bool = false;
+                let mut show_is_pdf: bool = false;
                 let mut show_requested = false;
 
                 match preview_msg {
@@ -2718,10 +2902,12 @@ pub fn run_preview_window() {
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
+                            let is_pdf = is_pdf_file(&path);
                             if let Some(layout) =
                                 compute_mouse_layout(x, y, orig_dims, follow_cursor, bounds)
                             {
                                 show_is_video = is_video;
+                                show_is_pdf = is_pdf;
                                 show_layout = Some(layout);
                                 show_path = Some(path);
                             }
@@ -2734,6 +2920,7 @@ pub fn run_preview_window() {
 
                         if let Some(orig_dims) = get_media_dimensions(&path) {
                             let is_video = is_video_file(&path);
+                            let is_pdf = is_pdf_file(&path);
                             if let Some(layout) = compute_keyboard_layout(
                                 il,
                                 it,
@@ -2744,6 +2931,7 @@ pub fn run_preview_window() {
                                 bounds,
                             ) {
                                 show_is_video = is_video;
+                                show_is_pdf = is_pdf;
                                 show_layout = Some(layout);
                                 show_path = Some(path);
                             }
@@ -2759,6 +2947,8 @@ pub fn run_preview_window() {
                         }
 
                         let _ = ShowWindow(hwnd, SW_HIDE);
+                        pdf_host.close();
+                        set_layered_preview_mode(hwnd, true);
 
                         // Stop video playback if any
                         if let Ok(mut current) = CURRENT_MEDIA.lock() {
@@ -2787,7 +2977,71 @@ pub fn run_preview_window() {
                     let preview_w = layout.preview_w;
                     let preview_h = layout.preview_h;
 
-                    if show_is_video {
+                    if show_is_pdf {
+                        current_generation += 1;
+                        pending_load = None;
+                        clear_load_request(&load_request_slot);
+                        if let Some(cancel) = pending_load_cancel.take() {
+                            cancel.store(true, Ordering::Release);
+                        }
+
+                        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                            if let Some(ref mut media) = *current {
+                                media.cancel_background_work();
+                                stop_video_playback(media);
+                            }
+                            *current = None;
+                        }
+                        current_video_path = None;
+                        video_pos = (0, 0, 0, 0);
+                        pdf_host.close();
+
+                        set_layered_preview_mode(hwnd, false);
+                        let _ = MoveWindow(hwnd, pos_x, pos_y, media_width, media_height, false);
+                        let _ = SetWindowPos(
+                            hwnd,
+                            HWND_TOPMOST,
+                            pos_x,
+                            pos_y,
+                            media_width,
+                            media_height,
+                            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                        );
+                        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
+                        let rect = RECT {
+                            left: 0,
+                            top: 0,
+                            right: media_width,
+                            bottom: media_height,
+                        };
+                        if pdf_host.open(&path, hwnd, rect).is_ok() {
+                            keep_pdf_children_nonactivating(hwnd);
+                            last_pdf_child_check = Instant::now();
+                        } else {
+                            pdf_host.close();
+                            set_layered_preview_mode(hwnd, true);
+                            if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                *current =
+                                    Some(create_pdf_fallback_media(&path, preview_w, preview_h));
+                            }
+                            let _ =
+                                MoveWindow(hwnd, pos_x, pos_y, media_width, media_height, false);
+                            let _ = SetWindowPos(
+                                hwnd,
+                                HWND_TOPMOST,
+                                pos_x,
+                                pos_y,
+                                media_width,
+                                media_height,
+                                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                            );
+                            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                            render_layered_preview(hwnd);
+                        }
+                    } else if show_is_video {
+                        pdf_host.close();
+                        set_layered_preview_mode(hwnd, true);
                         // Cancel any in-flight image load before switching to video.
                         current_generation += 1;
                         pending_load = None;
@@ -2848,6 +3102,8 @@ pub fn run_preview_window() {
                             }
                         }
                     } else {
+                        pdf_host.close();
+                        set_layered_preview_mode(hwnd, true);
                         // For images/animations, load async
                         if current_video_path.is_some() {
                             if let Ok(mut media_guard) = CURRENT_MEDIA.lock() {
@@ -2910,6 +3166,8 @@ pub fn run_preview_window() {
                     }
 
                     let _ = ShowWindow(hwnd, SW_HIDE);
+                    pdf_host.close();
+                    set_layered_preview_mode(hwnd, true);
 
                     if let Ok(mut current) = CURRENT_MEDIA.lock() {
                         if let Some(ref mut media) = *current {
@@ -2936,6 +3194,10 @@ pub fn run_preview_window() {
         let (_, cvar) = &*load_request_slot;
         cvar.notify_all();
         let _ = load_worker.join();
+        pdf_host.close();
+        if com_initialized {
+            CoUninitialize();
+        }
     }
 }
 

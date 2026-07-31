@@ -2,6 +2,7 @@
 
 mod config;
 mod explorer_hook;
+mod pdf_preview;
 mod preview_window;
 mod startup;
 mod tray;

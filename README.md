@@ -4,7 +4,7 @@
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Rust Hover Preview is a Windows 11 system tray app that shows instant image and video previews in File Explorer when you hover files with the mouse or navigate with the keyboard.
+Rust Hover Preview is a Windows 11 system tray app that shows instant image, video, and PDF previews in File Explorer when you hover files with the mouse or navigate with the keyboard.
 
 Inspired by QTTabBar (QuizoApps) hover preview.
 
@@ -15,6 +15,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Mouse-hover and keyboard-navigation previews in Explorer
 - Static image previews plus animated GIF playback and libwebp-backed animated WebP playback
 - Video previews through FFmpeg (`ffplay` + `ffprobe`)
+- PDF previews through the Windows preview-handler mechanism
 - Tray controls for enable/disable, delay, positioning, startup, off-trigger key, and volume
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
 - Topmost, non-activating preview windows designed to avoid focus stealing
@@ -30,6 +31,10 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 ### Videos (FFmpeg required)
 
 `mp4`, `webm`, `mkv`, `avi`, `mov`, `wmv`, `flv`, `m4v`
+
+### Documents (Windows preview handler required)
+
+`pdf`
 
 ## Installation (Recommended)
 
@@ -76,6 +81,24 @@ ffprobe -version
 ffplay -version
 ffprobe -version
 ```
+
+## Enable PDF Preview (PDF-XChange)
+
+PDF previews use the preview handler registered for `.pdf` in Windows. PDF-XChange Editor or Viewer must be installed with its shell preview extension enabled.
+
+To register or repair the PDF-XChange handler, run:
+
+```text
+C:\Program Files\Tracker Software\Shell Extensions\XCShInfoSetup.exe
+```
+
+Select **PDF-XChange** as the PDF preview handler. The active handler can be verified at:
+
+```text
+HKEY_CLASSES_ROOT\.pdf\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}
+```
+
+The app uses the registered handler and falls back to the current PDF-XChange handler CLSID if the registry lookup fails. If no compatible handler is available, it shows a non-interactive PDF file tile instead of failing.
 
 ## Usage
 
@@ -162,6 +185,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview.
 - Uses Google's libwebp through `webp-animation` for animated WebP decoding
 - Uses `directories` for Windows roaming configuration paths
 - Uses `ffprobe` for video dimensions and `ffplay` for video playback
+- Hosts the registered PDF `IPreviewHandler` on the preview window's STA thread
 - Sets per-monitor DPI awareness (v2 with fallback) on startup to prevent scaling artifacts on layered windows
 - Uses the registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) for startup control
 - Counts and classifies Explorer browser windows via EnumWindows and CabinetWClass/ExplorerWClass class matching, so idle polling never spins up Explorer's shell automation providers

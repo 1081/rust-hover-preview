@@ -46,6 +46,8 @@ const IMAGE_EXTENSIONS: &[&str] = &[
 // Supported video extensions
 const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v"];
 
+const PREVIEW_HANDLER_EXTENSIONS: &[&str] = &["pdf"];
+
 struct FolderMediaIndex {
     built_at: Instant,
     by_file_name: HashMap<String, PathBuf>,
@@ -388,7 +390,14 @@ fn is_video_file(path: &PathBuf) -> bool {
 }
 
 fn is_media_file(path: &PathBuf) -> bool {
-    is_image_file(path) || is_video_file(path)
+    is_image_file(path) || is_video_file(path) || is_preview_handler_file(path)
+}
+
+fn is_preview_handler_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| PREVIEW_HANDLER_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+        .unwrap_or(false)
 }
 
 fn same_path(a: &PathBuf, b: &PathBuf) -> bool {
