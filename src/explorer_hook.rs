@@ -390,7 +390,10 @@ fn is_video_file(path: &PathBuf) -> bool {
 }
 
 fn is_media_file(path: &PathBuf) -> bool {
-    is_image_file(path) || is_video_file(path) || is_preview_handler_file(path)
+    is_image_file(path)
+        || is_video_file(path)
+        || is_preview_handler_file(path)
+        || crate::text_preview::is_text_preview_file(path)
 }
 
 fn is_preview_handler_file(path: &Path) -> bool {

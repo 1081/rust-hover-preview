@@ -16,6 +16,7 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 - Static image previews plus animated GIF playback and libwebp-backed animated WebP playback
 - Video previews through FFmpeg (`ffplay` + `ffprobe`)
 - PDF previews through the Windows preview-handler mechanism
+- Text and source-code previews with encoding detection and line numbers
 - Tray controls for enable/disable, delay, positioning, startup, off-trigger key, and volume
 - Explorer Shell view detection, folder caching, and path normalization for reliable hover matching
 - Topmost, non-activating preview windows designed to avoid focus stealing
@@ -35,6 +36,12 @@ Inspired by QTTabBar (QuizoApps) hover preview.
 ### Documents (Windows preview handler required)
 
 `pdf`
+
+### Text and source code
+
+`txt`, `md`, `log`, `ini`, `cfg`, `conf`, `rs`, `py`, `js`, `jsx`, `ts`, `tsx`, `c`, `h`, `cpp`, `hpp`, `cs`, `java`, `go`, `rb`, `php`, `swift`, `kt`, `html`, `css`, `xml`, `json`, `yaml`, `toml`, `sql`, `sh`, `ps1`, `bat`, `cmd`, `lua`, and common related extensions and extensionless build/config files.
+
+Text previews read at most 512 KB, support UTF-8, UTF-16 BOMs, and Windows-1252 fallback, and reject likely binary content.
 
 ## Installation (Recommended)
 
@@ -189,6 +196,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview.
 - Uses `directories` for Windows roaming configuration paths
 - Uses `ffprobe` for video dimensions and `ffplay` for video playback
 - Hosts the registered PDF `IPreviewHandler` on the preview window's STA thread
+- Renders bounded text/source previews asynchronously into the existing non-activating layered window
 - Sets per-monitor DPI awareness (v2 with fallback) on startup to prevent scaling artifacts on layered windows
 - Uses the registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) for startup control
 - Counts and classifies Explorer browser windows via EnumWindows and CabinetWClass/ExplorerWClass class matching, so idle polling never spins up Explorer's shell automation providers

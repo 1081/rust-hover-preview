@@ -5,6 +5,7 @@ mod explorer_hook;
 mod pdf_preview;
 mod preview_window;
 mod startup;
+mod text_preview;
 mod tray;
 
 use once_cell::sync::Lazy;

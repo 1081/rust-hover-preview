@@ -1,5 +1,8 @@
 use crate::config::{sanitize_webp_playback_fps, TransparentBackground, DEFAULT_WEBP_PLAYBACK_FPS};
 use crate::pdf_preview::PdfPreviewHost;
+use crate::text_preview::{
+    is_text_preview_file, load_text_preview, TEXT_PREVIEW_HEIGHT, TEXT_PREVIEW_WIDTH,
+};
 use crate::{CONFIG, RUNNING};
 use gif::DecodeOptions;
 use image::GenericImageView;
@@ -1665,6 +1668,26 @@ fn load_media(
         return load_video_thumbnail(path, max_width, max_height);
     }
 
+    if is_text_preview_file(path) {
+        let frame = load_text_preview(path, max_width, max_height, cancel.as_ref())?;
+        return Some(MediaData {
+            frames: vec![ImageFrame {
+                pixels: frame.pixels,
+                width: frame.width,
+                height: frame.height,
+                delay_ms: 0,
+            }],
+            shared_frames: None,
+            all_frames_loaded: None,
+            current_frame: 0,
+            last_frame_time: Instant::now(),
+            media_type: MediaType::StaticImage,
+            stream_cancel: Some(cancel),
+            video_process: None,
+            loading_start: None,
+        });
+    }
+
     let guessed_format = if is_confirm_file_type_enabled() {
         guessed_image_format(path)
     } else {
@@ -1712,6 +1735,10 @@ fn get_media_dimensions(path: &PathBuf) -> Option<(u32, u32)> {
         return get_video_geometry(path)
             .map(|g| (g.width, g.height))
             .or(Some((1920, 1080)));
+    }
+
+    if is_text_preview_file(path) {
+        return Some((TEXT_PREVIEW_WIDTH, TEXT_PREVIEW_HEIGHT));
     }
 
     if is_confirm_file_type_enabled() {
