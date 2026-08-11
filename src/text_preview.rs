@@ -122,6 +122,7 @@ const TEXT_FILE_NAMES: &[&str] = &[
     ".gitattributes",
     ".editorconfig",
 ];
+const EXCLUDED_TEXT_FILE_NAMES: &[&str] = &["desktop.ini"];
 
 pub struct TextPreviewFrame {
     pub pixels: Vec<u8>,
@@ -134,6 +135,9 @@ pub fn is_text_preview_file(path: &Path) -> bool {
         return false;
     };
     let file_name = file_name.to_ascii_lowercase();
+    if EXCLUDED_TEXT_FILE_NAMES.contains(&file_name.as_str()) {
+        return false;
+    }
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -733,6 +737,9 @@ mod tests {
         assert!(is_text_preview_file(Path::new("main.rs")));
         assert!(is_text_preview_file(Path::new("Dockerfile")));
         assert!(is_text_preview_file(Path::new(".gitignore")));
+        assert!(is_text_preview_file(Path::new("settings.ini")));
+        assert!(!is_text_preview_file(Path::new("desktop.ini")));
+        assert!(!is_text_preview_file(Path::new("DESKTOP.INI")));
         assert!(!is_text_preview_file(Path::new("photo.png")));
     }
 
