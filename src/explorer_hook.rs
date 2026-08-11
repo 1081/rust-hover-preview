@@ -1,3 +1,4 @@
+use crate::config::PreviewTriggerMode;
 use crate::preview_window::{
     hide_preview, is_cursor_over_image_preview, is_cursor_over_video_preview, show_preview,
     show_preview_keyboard,
@@ -2720,7 +2721,7 @@ fn is_pressed_or_down_state(state: u16) -> bool {
     (state & 0x8000) != 0 || (state & 0x0001) != 0
 }
 
-fn off_trigger_key_to_vk(key: &str) -> Option<i32> {
+fn trigger_key_to_vk(key: &str) -> Option<i32> {
     let key = key.trim().to_ascii_lowercase();
     let vk = match key.as_str() {
         "alt" | "menu" => 0x12,
@@ -2773,14 +2774,22 @@ fn off_trigger_key_to_vk(key: &str) -> Option<i32> {
     Some(vk)
 }
 
-fn is_off_trigger_key_down(key: &str) -> bool {
-    let Some(vk) = off_trigger_key_to_vk(key) else {
+fn is_trigger_key_down(key: &str) -> bool {
+    let Some(vk) = trigger_key_to_vk(key) else {
         return false;
     };
 
     unsafe {
         let state = GetAsyncKeyState(vk) as u16;
         (state & 0x8000) != 0
+    }
+}
+
+fn trigger_mode_suppresses_preview(mode: PreviewTriggerMode, key_down: bool) -> bool {
+    match mode {
+        PreviewTriggerMode::Disabled => false,
+        PreviewTriggerMode::HoldToHide => key_down,
+        PreviewTriggerMode::HoldToShow => !key_down,
     }
 }
 
@@ -3075,12 +3084,18 @@ pub fn run_explorer_hook() {
             (
                 c.preview_enabled,
                 c.hover_delay_ms,
-                c.enable_off_trigger_key,
-                c.off_trigger_key.clone(),
+                c.preview_trigger_mode,
+                c.trigger_key.clone(),
                 c.same_file_rehover_delay_ms,
             )
         })
-        .unwrap_or((true, 0, true, "alt".to_string(), 750));
+        .unwrap_or((
+            true,
+            0,
+            PreviewTriggerMode::HoldToHide,
+            "alt".to_string(),
+            750,
+        ));
     let mut slow_explorer_probe_count = 0u32;
     let mut explorer_probe_backoff_until: Option<Instant> = None;
     let mut last_display_signature = current_display_signature();
@@ -3157,8 +3172,8 @@ pub fn run_explorer_hook() {
             config_snapshot = (
                 config.preview_enabled,
                 config.hover_delay_ms,
-                config.enable_off_trigger_key,
-                config.off_trigger_key.clone(),
+                config.preview_trigger_mode,
+                config.trigger_key.clone(),
                 config.same_file_rehover_delay_ms,
             );
         }
@@ -3166,15 +3181,16 @@ pub fn run_explorer_hook() {
         let (
             preview_enabled,
             hover_delay_ms,
-            enable_off_trigger_key,
-            off_trigger_key,
+            preview_trigger_mode,
+            trigger_key,
             same_file_rehover_delay_ms,
         ) = config_snapshot.clone();
 
-        let off_trigger_active =
-            enable_off_trigger_key && is_off_trigger_key_down(&off_trigger_key);
+        let trigger_key_down = is_trigger_key_down(&trigger_key);
+        let trigger_suppresses_preview =
+            trigger_mode_suppresses_preview(preview_trigger_mode, trigger_key_down);
 
-        if off_trigger_active {
+        if trigger_suppresses_preview {
             if last_file.is_some() || keyboard_file.is_some() {
                 hide_preview();
             }
@@ -3787,6 +3803,34 @@ mod tests {
         assert!(is_pressed_or_down_state(0x8000));
         assert!(is_pressed_or_down_state(0x8001));
         assert!(!is_pressed_or_down_state(0x0000));
+    }
+
+    #[test]
+    fn preview_trigger_modes_apply_key_state() {
+        assert!(!trigger_mode_suppresses_preview(
+            PreviewTriggerMode::Disabled,
+            false
+        ));
+        assert!(!trigger_mode_suppresses_preview(
+            PreviewTriggerMode::Disabled,
+            true
+        ));
+        assert!(trigger_mode_suppresses_preview(
+            PreviewTriggerMode::HoldToHide,
+            true
+        ));
+        assert!(!trigger_mode_suppresses_preview(
+            PreviewTriggerMode::HoldToHide,
+            false
+        ));
+        assert!(!trigger_mode_suppresses_preview(
+            PreviewTriggerMode::HoldToShow,
+            true
+        ));
+        assert!(trigger_mode_suppresses_preview(
+            PreviewTriggerMode::HoldToShow,
+            false
+        ));
     }
 
     #[test]

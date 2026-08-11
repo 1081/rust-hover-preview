@@ -1,4 +1,4 @@
-use crate::config::{PdfPreviewHandler, TransparentBackground};
+use crate::config::{PdfPreviewHandler, PreviewTriggerMode, TransparentBackground};
 use crate::pdf_preview::is_pdf_handler_available;
 use crate::preview_window::{hide_preview, refresh_preview};
 use crate::{startup, CONFIG, RUNNING};
@@ -26,7 +26,8 @@ const ID_TRAY_EXIT: u16 = 1001;
 const ID_TRAY_STARTUP: u16 = 1002;
 const ID_TRAY_ENABLE: u16 = 1003;
 const ID_TRAY_CONFIRM_FILE_TYPE: u16 = 1004;
-const ID_TRAY_ENABLE_OFF_TRIGGER_KEY: u16 = 1005;
+const ID_TRAY_TRIGGER_HOLD_TO_HIDE: u16 = 1005;
+const ID_TRAY_TRIGGER_HOLD_TO_SHOW: u16 = 1006;
 const ID_TRAY_BG_TRANSPARENT: u16 = 1007;
 const ID_TRAY_BG_BLACK: u16 = 1008;
 const ID_TRAY_BG_WHITE: u16 = 1009;
@@ -96,8 +97,11 @@ unsafe extern "system" fn tray_window_proc(
                 ID_TRAY_CONFIRM_FILE_TYPE => {
                     toggle_confirm_file_type();
                 }
-                ID_TRAY_ENABLE_OFF_TRIGGER_KEY => {
-                    toggle_enable_off_trigger_key();
+                ID_TRAY_TRIGGER_HOLD_TO_HIDE => {
+                    toggle_preview_trigger_mode(PreviewTriggerMode::HoldToHide)
+                }
+                ID_TRAY_TRIGGER_HOLD_TO_SHOW => {
+                    toggle_preview_trigger_mode(PreviewTriggerMode::HoldToShow)
                 }
                 ID_TRAY_BG_TRANSPARENT => {
                     set_transparent_background(TransparentBackground::Transparent)
@@ -178,32 +182,46 @@ unsafe fn show_context_menu(hwnd: HWND) {
         w!("Enable Preview"),
     );
 
-    // Add "Enable Off Trigger Key" with checkmark
-    let (enable_off_trigger_key, off_trigger_key) = CONFIG
+    let (preview_trigger_mode, trigger_key) = CONFIG
         .lock()
-        .map(|c| (c.enable_off_trigger_key, c.off_trigger_key.clone()))
-        .unwrap_or((true, "alt".to_string()));
-    let off_trigger_flags = MF_STRING
-        | if enable_off_trigger_key {
-            MF_CHECKED
-        } else {
-            MF_UNCHECKED
-        };
-    let mut off_trigger_key_chars = off_trigger_key.chars();
-    let off_trigger_key_display = match off_trigger_key_chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + off_trigger_key_chars.as_str(),
-        None => off_trigger_key,
+        .map(|c| (c.preview_trigger_mode, c.trigger_key.clone()))
+        .unwrap_or((PreviewTriggerMode::HoldToHide, "alt".to_string()));
+    let mut trigger_key_chars = trigger_key.chars();
+    let trigger_key_display = match trigger_key_chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + trigger_key_chars.as_str(),
+        None => trigger_key,
     };
-    let off_trigger_label = format!("Enable Off Trigger Key ({})", off_trigger_key_display);
-    let off_trigger_label_wide: Vec<u16> = off_trigger_label
+    let hold_to_hide_label = format!("Hold {} to hide previews", trigger_key_display);
+    let hold_to_hide_label_wide: Vec<u16> = hold_to_hide_label
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
     let _ = AppendMenuW(
         menu,
-        off_trigger_flags,
-        ID_TRAY_ENABLE_OFF_TRIGGER_KEY as usize,
-        PCWSTR(off_trigger_label_wide.as_ptr()),
+        MF_STRING
+            | if preview_trigger_mode == PreviewTriggerMode::HoldToHide {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_TRIGGER_HOLD_TO_HIDE as usize,
+        PCWSTR(hold_to_hide_label_wide.as_ptr()),
+    );
+    let hold_to_show_label = format!("Only preview while holding {}", trigger_key_display);
+    let hold_to_show_label_wide: Vec<u16> = hold_to_show_label
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING
+            | if preview_trigger_mode == PreviewTriggerMode::HoldToShow {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_TRIGGER_HOLD_TO_SHOW as usize,
+        PCWSTR(hold_to_show_label_wide.as_ptr()),
     );
 
     // Add "Confirm File Type" with checkmark (content/header sniffing)
@@ -564,9 +582,13 @@ fn toggle_preview_enabled() {
     }
 }
 
-fn toggle_enable_off_trigger_key() {
+fn toggle_preview_trigger_mode(mode: PreviewTriggerMode) {
     if let Ok(mut config) = CONFIG.lock() {
-        config.enable_off_trigger_key = !config.enable_off_trigger_key;
+        config.preview_trigger_mode = if config.preview_trigger_mode == mode {
+            PreviewTriggerMode::Disabled
+        } else {
+            mode
+        };
         config.save();
     }
 }

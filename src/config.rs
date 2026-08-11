@@ -52,6 +52,32 @@ pub enum PdfPreviewHandler {
     PowerToys,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewTriggerMode {
+    Disabled,
+    HoldToHide,
+    HoldToShow,
+}
+
+impl PreviewTriggerMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::HoldToHide => "hold_to_hide",
+            Self::HoldToShow => "hold_to_show",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disabled" => Some(Self::Disabled),
+            "hold_to_hide" => Some(Self::HoldToHide),
+            "hold_to_show" => Some(Self::HoldToShow),
+            _ => None,
+        }
+    }
+}
+
 impl PdfPreviewHandler {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -79,8 +105,8 @@ pub struct AppConfig {
     pub run_at_startup: bool,
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
-    pub enable_off_trigger_key: bool,
-    pub off_trigger_key: String,
+    pub preview_trigger_mode: PreviewTriggerMode,
+    pub trigger_key: String,
     pub confirm_file_type: bool,
     pub follow_cursor: bool,
     pub same_file_rehover_delay_ms: u64,
@@ -97,8 +123,8 @@ impl Default for AppConfig {
             run_at_startup: true,
             hover_delay_ms: 0,
             preview_enabled: true,
-            enable_off_trigger_key: true,
-            off_trigger_key: "alt".to_string(),
+            preview_trigger_mode: PreviewTriggerMode::HoldToHide,
+            trigger_key: "alt".to_string(),
             confirm_file_type: false,
             follow_cursor: false,
             same_file_rehover_delay_ms: 750,
@@ -167,13 +193,13 @@ impl AppConfig {
             );
             ini.set(
                 CONFIG_SECTION,
-                "enable_off_trigger_key",
-                Some(self.enable_off_trigger_key.to_string()),
+                "preview_trigger_mode",
+                Some(self.preview_trigger_mode.as_str().to_string()),
             );
             ini.set(
                 CONFIG_SECTION,
-                "off_trigger_key",
-                Some(self.off_trigger_key.clone()),
+                "trigger_key",
+                Some(self.trigger_key.clone()),
             );
             ini.set(
                 CONFIG_SECTION,
@@ -224,13 +250,25 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "preview_enabled") {
             self.preview_enabled = value;
         }
-        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "enable_off_trigger_key") {
-            self.enable_off_trigger_key = value;
+        if let Some(value) = ini.get(CONFIG_SECTION, "preview_trigger_mode") {
+            if let Some(mode) = PreviewTriggerMode::from_str(&value) {
+                self.preview_trigger_mode = mode;
+            }
+        } else if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "enable_off_trigger_key")
+        {
+            self.preview_trigger_mode = if value {
+                PreviewTriggerMode::HoldToHide
+            } else {
+                PreviewTriggerMode::Disabled
+            };
         }
-        if let Some(value) = ini.get(CONFIG_SECTION, "off_trigger_key") {
+        if let Some(value) = ini
+            .get(CONFIG_SECTION, "trigger_key")
+            .or_else(|| ini.get(CONFIG_SECTION, "off_trigger_key"))
+        {
             let value = value.trim();
             if !value.is_empty() {
-                self.off_trigger_key = value.to_string();
+                self.trigger_key = value.to_string();
             }
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "confirm_file_type") {
@@ -279,5 +317,33 @@ mod tests {
         ] {
             assert_eq!(PdfPreviewHandler::from_str(handler.as_str()), Some(handler));
         }
+    }
+
+    #[test]
+    fn preview_trigger_mode_round_trips_config_values() {
+        for mode in [
+            PreviewTriggerMode::Disabled,
+            PreviewTriggerMode::HoldToHide,
+            PreviewTriggerMode::HoldToShow,
+        ] {
+            assert_eq!(PreviewTriggerMode::from_str(mode.as_str()), Some(mode));
+        }
+    }
+
+    #[test]
+    fn legacy_off_trigger_setting_migrates_to_trigger_mode() {
+        let mut ini = Ini::new();
+        ini.set(
+            CONFIG_SECTION,
+            "enable_off_trigger_key",
+            Some("false".to_string()),
+        );
+        ini.set(CONFIG_SECTION, "off_trigger_key", Some("shift".to_string()));
+        let mut config = AppConfig::default();
+
+        config.apply_ini(&ini);
+
+        assert_eq!(config.preview_trigger_mode, PreviewTriggerMode::Disabled);
+        assert_eq!(config.trigger_key, "shift");
     }
 }

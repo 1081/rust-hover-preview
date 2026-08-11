@@ -95,12 +95,24 @@ Section PreInstall
   ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "preview_enabled"
   StrCmp $0 "" 0 +2
     WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "preview_enabled" "true"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "enable_off_trigger_key"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "enable_off_trigger_key" "true"
-  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "off_trigger_key"
-  StrCmp $0 "" 0 +2
-    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "off_trigger_key" "alt"
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "preview_trigger_mode"
+  StrCmp $0 "" preview_trigger_mode_missing preview_trigger_mode_done
+  preview_trigger_mode_missing:
+    ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "enable_off_trigger_key"
+    StrCmp $0 "false" preview_trigger_mode_disabled
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "preview_trigger_mode" "hold_to_hide"
+    Goto preview_trigger_mode_done
+  preview_trigger_mode_disabled:
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "preview_trigger_mode" "disabled"
+  preview_trigger_mode_done:
+  ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "trigger_key"
+  StrCmp $0 "" trigger_key_missing trigger_key_done
+  trigger_key_missing:
+    ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "off_trigger_key"
+    StrCmp $0 "" 0 +2
+      StrCpy $0 "alt"
+    WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "trigger_key" "$0"
+  trigger_key_done:
   ReadINIStr $0 "$APPDATA\\rust-hover-preview\\config.ini" "settings" "confirm_file_type"
   StrCmp $0 "" 0 +2
     WriteINIStr "$APPDATA\\rust-hover-preview\\config.ini" "settings" "confirm_file_type" "false"
